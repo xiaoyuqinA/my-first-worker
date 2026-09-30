@@ -160,8 +160,34 @@ dist
 
 # wrangler project
 
-.dev.vars*
-!.dev.vars.example
-.env*
-!.env.example
 .wrangler/
+
+# ===== 敏感信息 / 密钥（务必忽略，禁止提交） =====
+# Wrangler 本地密钥文件（LLM 地址、API Key 等）
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+
+# 环境变量文件
+.env
+.env.*
+!.env.example
+
+# 通用密钥 / 凭证文件
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+secrets.json
+secret.json
+credentials.json
+service-account*.json
+.wrangler-account.json
+.npmrc
+
+# 本地/私有配置
+config.local.*
+*.local.json
+local.settings.json
