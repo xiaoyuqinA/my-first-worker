@@ -1,31 +1,64 @@
-import { Router } from "../utils/router.js";
-import { ok, fail, readJson } from "../utils/response.js";
+import { Hono } from "hono";
+import * as z from "zod";
+import { zValidator } from "../utils/validator.js";
+import { ok, fail } from "../utils/response.js";
 import { createPayment, getPayment, handleCallback } from "../services/payment.js";
 
-const router = new Router();
+const router = new Hono();
 
 // 内存示例数据
 const tasks = new Map();
 
-// GET /api/tasks
-router.get("/", ({ query }) => {
-	let list = [...tasks.values()];
-	if (query.status) list = list.filter((t) => t.status === query.status);
-	return ok(list);
+const TASK_STATUS = ["pending", "processing", "completed", "failed"];
+
+const createTaskSchema = z.object({
+	title: z.string().min(1, "title 不能为空"),
+	description: z.string().optional(),
+	userId: z.string().optional(),
+	scriptId: z.string().optional(),
 });
 
-// GET /api/tasks/:id
-router.get("/:id", ({ params }) => {
-	const task = tasks.get(params.id);
-	if (!task) return fail("任务不存在", 404);
-	return ok(task);
+const updateTaskSchema = z.object({
+	title: z.string().min(1).optional(),
+	description: z.string().optional(),
+	status: z.enum(TASK_STATUS).optional(),
+	userId: z.string().optional(),
+	scriptId: z.string().optional(),
+});
+
+const listQuerySchema = z.object({
+	status: z.enum(TASK_STATUS).optional(),
+});
+
+const paySchema = z.object({
+	amount: z.coerce.number().positive("amount 必须为正数").default(1),
+	currency: z.string().optional(),
+	channel: z.string().optional(),
+});
+
+const callbackSchema = z.object({
+	orderId: z.string().min(1, "orderId 不能为空"),
+	status: z.enum(["paid", "failed", "refunded"]).optional(),
+	transactionId: z.string().optional(),
+});
+
+// GET /api/tasks?status=
+router.get("/", zValidator("query", listQuerySchema), (c) => {
+	const { status } = c.req.valid("query");
+	let list = [...tasks.values()];
+	if (status) list = list.filter((t) => t.status === status);
+	return ok(c, list);
+});
+
+// POST /api/tasks/pay/callback —— 支付回调（需注册在 /:id 之前）
+router.post("/pay/callback", zValidator("json", callbackSchema), async (c) => {
+	const order = await handleCallback(c.env, c.req.valid("json"));
+	return ok(c, order, "回调处理成功");
 });
 
 // POST /api/tasks
-router.post("/", async ({ request }) => {
-	const body = await readJson(request);
-	if (!body?.title) return fail("title 不能为空", 422);
-
+router.post("/", zValidator("json", createTaskSchema), (c) => {
+	const body = c.req.valid("json");
 	const id = crypto.randomUUID();
 	const task = {
 		id,
@@ -37,30 +70,39 @@ router.post("/", async ({ request }) => {
 		createdAt: new Date().toISOString(),
 	};
 	tasks.set(id, task);
-	return ok(task, "创建成功");
+	return ok(c, task, "创建成功");
 });
 
-// PATCH /api/tasks/:id  —— 更新状态
-router.patch("/:id", async ({ params, request }) => {
-	const task = tasks.get(params.id);
-	if (!task) return fail("任务不存在", 404);
-
-	const body = await readJson(request);
-	if (!body) return fail("请求体必须是 JSON", 400);
-
-	Object.assign(task, body, { id: task.id, updatedAt: new Date().toISOString() });
-	tasks.set(params.id, task);
-	return ok(task, "更新成功");
+// GET /api/tasks/:id
+router.get("/:id", (c) => {
+	const task = tasks.get(c.req.param("id"));
+	if (!task) return fail(c, "任务不存在", 404);
+	return ok(c, task);
 });
 
-// POST /api/tasks/:id/pay  —— 发起支付
-router.post("/:id/pay", async ({ params, request, env }) => {
-	const task = tasks.get(params.id);
-	if (!task) return fail("任务不存在", 404);
+// PATCH /api/tasks/:id —— 更新
+router.patch("/:id", zValidator("json", updateTaskSchema), (c) => {
+	const id = c.req.param("id");
+	const task = tasks.get(id);
+	if (!task) return fail(c, "任务不存在", 404);
 
-	const body = (await readJson(request)) ?? {};
-	const payment = await createPayment(env, {
-		amount: body.amount ?? 1,
+	Object.assign(task, c.req.valid("json"), {
+		id: task.id,
+		updatedAt: new Date().toISOString(),
+	});
+	tasks.set(id, task);
+	return ok(c, task, "更新成功");
+});
+
+// POST /api/tasks/:id/pay —— 发起支付
+router.post("/:id/pay", zValidator("json", paySchema), async (c) => {
+	const id = c.req.param("id");
+	const task = tasks.get(id);
+	if (!task) return fail(c, "任务不存在", 404);
+
+	const body = c.req.valid("json");
+	const payment = await createPayment(c.env, {
+		amount: body.amount,
 		currency: body.currency,
 		subject: task.title,
 		userId: task.userId,
@@ -68,34 +110,25 @@ router.post("/:id/pay", async ({ params, request, env }) => {
 	});
 
 	task.payment = { orderId: payment.orderId, status: payment.status };
-	tasks.set(params.id, task);
-	return ok(payment, "支付订单已创建");
+	tasks.set(id, task);
+	return ok(c, payment, "支付订单已创建");
 });
 
-// GET /api/tasks/:id/pay  —— 查询支付状态
-router.get("/:id/pay", async ({ params, env }) => {
-	const task = tasks.get(params.id);
-	if (!task) return fail("任务不存在", 404);
-	if (!task.payment?.orderId) return fail("该任务尚未创建支付订单", 404);
+// GET /api/tasks/:id/pay —— 查询支付状态
+router.get("/:id/pay", async (c) => {
+	const task = tasks.get(c.req.param("id"));
+	if (!task) return fail(c, "任务不存在", 404);
+	if (!task.payment?.orderId) return fail(c, "该任务尚未创建支付订单", 404);
 
-	const payment = await getPayment(env, task.payment.orderId);
-	if (!payment) return fail("订单不存在", 404);
-	return ok(payment);
-});
-
-// POST /api/tasks/pay/callback  —— 支付回调
-router.post("/pay/callback", async ({ request, env }) => {
-	const body = await readJson(request);
-	if (!body?.orderId) return fail("orderId 不能为空", 422);
-
-	const order = await handleCallback(env, body);
-	return ok(order, "回调处理成功");
+	const payment = await getPayment(c.env, task.payment.orderId);
+	if (!payment) return fail(c, "订单不存在", 404);
+	return ok(c, payment);
 });
 
 // DELETE /api/tasks/:id
-router.delete("/:id", ({ params }) => {
-	if (!tasks.delete(params.id)) return fail("任务不存在", 404);
-	return ok(null, "删除成功");
+router.delete("/:id", (c) => {
+	if (!tasks.delete(c.req.param("id"))) return fail(c, "任务不存在", 404);
+	return ok(c, null, "删除成功");
 });
 
 export default router;

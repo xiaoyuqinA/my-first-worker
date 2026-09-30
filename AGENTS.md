@@ -11,13 +11,17 @@ For all limits and quotas, retrieve from the product's `/platform/limits/` page.
 
 ## Commands
 
+This project uses [Bun](https://bun.sh) for dependency management and scripts.
+
 | Command | Purpose |
 |---------|---------|
-| `npx wrangler dev` | Local development |
-| `npx wrangler deploy` | Deploy to Cloudflare |
-| `npx wrangler types` | Generate TypeScript types |
+| `bun install` | Install dependencies (uses `bun.lock`) |
+| `bun run dev` | Local development (`wrangler dev`) |
+| `bun run deploy` | Deploy to Cloudflare |
+| `bun run test` | Run tests (`vitest run`) |
+| `bun run cf-typegen` | Generate TypeScript types (`wrangler types`) |
 
-Run `wrangler types` after changing bindings in wrangler.jsonc.
+Run `bun run cf-typegen` after changing bindings in wrangler.jsonc.
 
 ## Local Explorer (Debugging & Inspection)
 

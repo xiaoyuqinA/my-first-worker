@@ -1,46 +1,24 @@
 /**
- * 统一的响应工具
+ * 统一的响应工具（基于 Hono Context）
  */
-
-const JSON_HEADERS = {
-	"content-type": "application/json; charset=utf-8",
-};
-
-/**
- * 返回 JSON 响应
- * @param {unknown} data
- * @param {number} [status=200]
- * @param {Record<string, string>} [headers]
- */
-export function json(data, status = 200, headers = {}) {
-	return new Response(JSON.stringify(data), {
-		status,
-		headers: { ...JSON_HEADERS, ...headers },
-	});
-}
 
 /**
  * 成功响应
+ * @param {import("hono").Context} c
+ * @param {unknown} [data]
+ * @param {string} [message]
  */
-export function ok(data = null, message = "ok") {
-	return json({ success: true, message, data });
+export function ok(c, data = null, message = "ok") {
+	return c.json({ success: true, message, data });
 }
 
 /**
  * 失败响应
+ * @param {import("hono").Context} c
+ * @param {string} [message]
+ * @param {number} [status]
+ * @param {unknown} [data]
  */
-export function fail(message = "error", status = 400, data = null) {
-	return json({ success: false, message, data }, status);
-}
-
-/**
- * 解析请求体 JSON，失败时返回 null
- * @param {Request} request
- */
-export async function readJson(request) {
-	try {
-		return await request.json();
-	} catch {
-		return null;
-	}
+export function fail(c, message = "error", status = 400, data = null) {
+	return c.json({ success: false, message, data }, status);
 }
